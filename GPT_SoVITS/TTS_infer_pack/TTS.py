@@ -532,6 +532,12 @@ class TTS:
             # all_bert_features_list = [F.pad(item,(0,0,0,max_len-item.shape[0]), value=0) for item in all_bert_features_list]
             # all_bert_features_batch = torch.stack(all_bert_features_list, dim=0)
             
+            #### padding on left
+            # all_phones_list = [F.pad(item,(max_len-item.shape[0],0),value=0) for item in all_phones_list]
+            # all_phones_batch = torch.stack(all_phones_list, dim=0)
+            # all_bert_features_list = [F.pad(item,(max_len-item.shape[1],0,0,0), value=0) for item in all_bert_features_list]
+            # all_bert_features_batch = torch.stack(all_bert_features_list, dim=0)
+            
             batch = {
                 "phones": phones_batch,
                 "phones_len": torch.LongTensor(phones_len_list).to(device),
@@ -584,9 +590,10 @@ class TTS:
                     "top_k": 5,                   # int. top k sampling
                     "top_p": 1,                   # float. top p sampling
                     "temperature": 1,             # float. temperature for sampling
+                    "repetition_penalty": 1.35,   # float. repetition penalty for sampling of T2S model.
                     "text_split_method": "cut0",  # str. text split method, see text_segmentaion_method.py for details.
                     "batch_size": 1,              # int. batch size for inference
-                    "batch_threshold": 0.75,      # float. threshold for batch splitting.
+                    "batch_threshold": 1,      # float. threshold for batch splitting.
                     "split_bucket: True,          # bool. whether to split the batch into multiple buckets.
                     "return_fragment": False,     # bool. step by step return the audio fragment.
                     "speed_factor":1.0,           # float. control the speed of the synthesized audio.
@@ -606,9 +613,10 @@ class TTS:
         top_k:int = inputs.get("top_k", 5)
         top_p:float = inputs.get("top_p", 1)
         temperature:float = inputs.get("temperature", 1)
+        repetition_penalty: float = inputs.get("repetition_penalty", 1.35)
         text_split_method:str = inputs.get("text_split_method", "cut0")
         batch_size = inputs.get("batch_size", 1)
-        batch_threshold = inputs.get("batch_threshold", 0.75)
+        batch_threshold = inputs.get("batch_threshold", 1)
         speed_factor = inputs.get("speed_factor", 1.0)
         split_bucket = inputs.get("split_bucket", True)
         return_fragment = inputs.get("return_fragment", False)
@@ -755,7 +763,9 @@ class TTS:
                         top_k=top_k,
                         top_p=top_p,
                         temperature=temperature,
+                        repetition_penalty = repetition_penalty,
                         early_stop_num=self.configs.hz * self.configs.max_sec,
+                        dtype = self.precison,
                     )
                 t4 = ttime()
                 t_34 += t4 - t3
