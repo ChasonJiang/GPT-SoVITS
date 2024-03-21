@@ -661,7 +661,7 @@ class Text2SemanticDecoder(nn.Module):
             
         xy_attn_mask = torch.stack(xy_attn_mask_list, dim=0)
         new_attn_mask = torch.zeros_like(xy_attn_mask, dtype=xy_pos.dtype)
-        new_attn_mask.masked_fill_(xy_attn_mask, float("-inf"))
+        new_attn_mask.masked_fill_(xy_attn_mask, torch.finfo(xy_pos.dtype).min)
         xy_attn_mask = new_attn_mask
         xy_attn_mask = (xy_attn_mask.view(batch_size, 1, x_len+y_len, x_len+y_len)
                                     .expand(-1, self.num_head, -1, -1))
