@@ -14,7 +14,7 @@ from AR.modules.optim import ScaledAdam
 
 class Text2SemanticLightningModule(LightningModule):
     def __init__(self, config, output_dir, is_train=True,  flash_attn_enabled:bool = False):
-        super().__init__()
+        super(Text2SemanticLightningModule,self).__init__()
         self.config = config
         self.top_k = 3
         self.model = Text2SemanticDecoder(config=config, top_k=self.top_k,flash_attn_enabled=flash_attn_enabled)
@@ -56,6 +56,7 @@ class Text2SemanticLightningModule(LightningModule):
             on_epoch=True,
             prog_bar=True,
             sync_dist=True,
+            batch_size=batch["phoneme_ids_len"].shape[0],
         )
         self.log(
             "lr",
@@ -63,6 +64,7 @@ class Text2SemanticLightningModule(LightningModule):
             on_epoch=True,
             prog_bar=True,
             sync_dist=True,
+            batch_size=batch["phoneme_ids_len"].shape[0],
         )
         self.log(
             f"top_{self.top_k}_acc",
@@ -71,7 +73,10 @@ class Text2SemanticLightningModule(LightningModule):
             on_epoch=True,
             prog_bar=True,
             sync_dist=True,
+            batch_size=batch["phoneme_ids_len"].shape[0],
         )
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def validation_step(self, batch: Dict, batch_idx: int):
         return

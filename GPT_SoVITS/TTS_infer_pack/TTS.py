@@ -63,7 +63,7 @@ def set_seed(seed:int):
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)
-            # torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.deterministic = True
             # torch.backends.cudnn.benchmark = False
             # torch.backends.cudnn.enabled = True
     except:
@@ -616,7 +616,7 @@ class TTS:
         repetition_penalty: float = inputs.get("repetition_penalty", 1.35)
         text_split_method:str = inputs.get("text_split_method", "cut0")
         batch_size = inputs.get("batch_size", 1)
-        batch_threshold = inputs.get("batch_threshold", 1)
+        batch_threshold = inputs.get("batch_threshold", 0.75)
         speed_factor = inputs.get("speed_factor", 1.0)
         split_bucket = inputs.get("split_bucket", True)
         return_fragment = inputs.get("return_fragment", False)

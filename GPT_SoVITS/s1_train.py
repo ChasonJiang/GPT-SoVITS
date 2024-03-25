@@ -4,6 +4,7 @@ import pdb
 
 if "_CUDA_VISIBLE_DEVICES" in os.environ:
     os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["_CUDA_VISIBLE_DEVICES"]
+os.environ["CUDA_VISIBLE_DEVICES"]="0"
 import argparse
 import logging
 from pathlib import Path
@@ -126,6 +127,7 @@ def main(args):
         benchmark=False,
         fast_dev_run=False,
         strategy = DDPStrategy(
+            find_unused_parameters=True,
             process_group_backend="nccl" if platform.system() != "Windows" else "gloo"
         ) if torch.cuda.is_available() else "auto",
         precision=config["train"]["precision"],

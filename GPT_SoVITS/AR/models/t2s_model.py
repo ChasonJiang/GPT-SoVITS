@@ -1,5 +1,6 @@
 # modified from https://github.com/yangdongchao/SoundStorm/blob/master/soundstorm/s1/AR/models/t2s_model.py
 # reference: https://github.com/lifeiteng/vall-e
+import math
 import os, sys
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -38,8 +39,7 @@ default_config = {
     "EOS": 1024,
 }
 
-
-@torch.jit.script
+# @torch.jit.script
 class T2SMLP:
     def __init__(self, w1, b1, w2, b2):
         self.w1 = w1
@@ -53,7 +53,7 @@ class T2SMLP:
         return x
 
 
-@torch.jit.script
+# @torch.jit.script
 class T2SBlock:
     def __init__(
         self,
@@ -151,7 +151,7 @@ class T2SBlock:
         return x, k_cache, v_cache
 
 
-@torch.jit.script
+# @torch.jit.script
 class T2STransformer:
     def __init__(self, num_blocks : int, blocks: List[T2SBlock]):
         self.num_blocks : int = num_blocks
@@ -478,7 +478,7 @@ class Text2SemanticDecoder(nn.Module):
             
         xy_attn_mask = torch.stack(xy_attn_mask_list, dim=0)
         new_attn_mask = torch.zeros_like(xy_attn_mask, dtype=xy_pos.dtype)
-        new_attn_mask.masked_fill_(xy_attn_mask, float("-inf"))
+        new_attn_mask.masked_fill_(xy_attn_mask, torch.finfo(xy_pos.dtype).min)
         xy_attn_mask = new_attn_mask
         xy_attn_mask = (xy_attn_mask.view(batch_size, 1, x_len+y_len, x_len+y_len)
                                     .expand(-1, self.num_head, -1, -1)
