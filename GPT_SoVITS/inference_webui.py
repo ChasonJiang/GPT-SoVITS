@@ -93,7 +93,7 @@ def inference(text, text_lang,
               text_split_method, batch_size, 
               speed_factor, ref_text_free,
               split_bucket, fragment_interval,
-              seed, keep_random
+              seed, keep_random, padding_on_left
               ):
     if keep_random:
         seed = random.randrange(1 << 32)
@@ -115,6 +115,7 @@ def inference(text, text_lang,
         "return_fragment":False,
         "fragment_interval":fragment_interval,
         "seed":actual_seed,
+        "padding_on_left":padding_on_left
     }
     for item in tts_pipeline.run(inputs):
         yield item, actual_seed
@@ -212,6 +213,7 @@ with gr.Blocks(title="GPT-SoVITS WebUI") as app:
                     split_bucket = gr.Checkbox(label=i18n("数据分桶(可能会降低一点计算量，选就对了)"), value=True, interactive=True, show_label=True)
                     seed = gr.Number(label=i18n("随机种子"),value=-1)
                     keep_random = gr.Checkbox(label=i18n("保持随机"), value=True, interactive=True, show_label=True)
+                    padding_on_left = gr.Checkbox(label=i18n("左侧补齐"), value=True, interactive=True, show_label=True)
             # with gr.Column():
                 output = gr.Audio(label=i18n("输出的语音"))
                 with gr.Row():
@@ -228,7 +230,7 @@ with gr.Blocks(title="GPT-SoVITS WebUI") as app:
                 how_to_cut, batch_size, 
                 speed_factor, ref_text_free,
                 split_bucket,fragment_interval,
-                seed, keep_random
+                seed, keep_random, padding_on_left
              ],
             [output, seed],
         )

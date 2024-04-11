@@ -623,7 +623,15 @@ class TTS:
         seed = inputs.get("seed", -1)
         seed = -1 if seed in ["", None] else seed
         actual_seed = set_seed(seed)
+        padding_on_left = inputs.get("padding_on_left", False)
 
+        if padding_on_left:
+            print("padding on left")
+            self.t2s_model.model.infer_panel = self.t2s_model.model.infer_panel_batch_infer_with_flash_attn
+        else:
+            print("padding on right")
+            self.t2s_model.model.infer_panel = self.t2s_model.model.infer_panel_batch_infer_with_flash_attn_old
+        
         if return_fragment:
             print(i18n("分段返回模式已开启"))
             if split_bucket:

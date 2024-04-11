@@ -758,7 +758,8 @@ class Text2SemanticDecoder(nn.Module):
         top_p: int = 100,
         early_stop_num: int = -1,
         temperature: float = 1.0,
-        repetition_penalty: float = 1.35
+        repetition_penalty: float = 1.35,
+        **kwargs
     ):
         # 先对phones进行embedding、对bert_features进行project，再pad到相同长度，以缓解复读问题。（可能还有其他因素导致复读）
         max_len = 0
@@ -949,6 +950,8 @@ class Text2SemanticDecoder(nn.Module):
         top_p: int = 100,
         early_stop_num: int = -1,
         temperature: float = 1.0,
+        repetition_penalty: float = 1.35,
+        **kwargs
     ):
         # 先对phones进行embedding、对bert_features进行project，再pad到相同长度，以缓解复读问题。（可能还有其他因素导致复读）
         max_len = 0
@@ -1043,7 +1046,7 @@ class Text2SemanticDecoder(nn.Module):
                 logits = logits[:, :-1]
                 
             samples = sample(
-                logits, y, top_k=top_k, top_p=top_p, repetition_penalty=1.35, temperature=temperature
+                logits, y, top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature
             )[0]
 
             y = torch.concat([y, samples], dim=1)
