@@ -435,8 +435,7 @@ class TTS:
                  device:torch.device=torch.device("cpu"),
                  precision:torch.dtype=torch.float32,
                  ):
-        # 但是这里不能套，反而会负优化
-        # with torch.no_grad():
+
         _data:list = []
         index_and_len_list = []
         for idx, item in enumerate(data):
@@ -484,8 +483,7 @@ class TTS:
             norm_text_batch = []
             bert_max_len = 0
             phones_max_len = 0
-            # 但是这里也不能套，反而会负优化
-            # with torch.no_grad():
+
             for item in item_list:
                 if prompt_data is not None:
                     all_bert_features = torch.cat([prompt_data["bert_features"], item["bert_features"]], 1)\
@@ -575,7 +573,6 @@ class TTS:
         '''
         self.stop_flag = True
     
-    # 使用装饰器
     @torch.no_grad()
     def run(self, inputs:dict):
         """
@@ -592,6 +589,7 @@ class TTS:
                     "top_k": 5,                   # int. top k sampling
                     "top_p": 1,                   # float. top p sampling
                     "temperature": 1,             # float. temperature for sampling
+                    "repetition_penalty": 1.35,   # float. repetition penalty for sampling of T2S model.
                     "text_split_method": "cut0",  # str. text split method, see text_segmentation_method.py for details.
                     "batch_size": 1,              # int. batch size for inference
                     "batch_threshold": 1,      # float. threshold for batch splitting.
@@ -627,7 +625,6 @@ class TTS:
         actual_seed = set_seed(seed)
 
         if return_fragment:
-            # split_bucket = False
             print(i18n("分段返回模式已开启"))
             if split_bucket:
                 split_bucket = False
@@ -753,20 +750,19 @@ class TTS:
                 else:
                     prompt = self.prompt_cache["prompt_semantic"].expand(len(all_phoneme_ids), -1).to(self.configs.device)
                 
-                with torch.no_grad():
-                    pred_semantic_list, idx_list = self.t2s_model.model.infer_panel(
-                        all_phoneme_ids,
-                        all_phoneme_lens,
-                        prompt,
-                        all_bert_features,
-                        # prompt_phone_len=ph_offset,
-                        top_k=top_k,
-                        top_p=top_p,
-                        temperature=temperature,
-                        repetition_penalty = repetition_penalty,
-                        early_stop_num=self.configs.hz * self.configs.max_sec,
-                        dtype = self.precison,
-                    )
+                pred_semantic_list, idx_list = self.t2s_model.model.infer_panel(
+                    all_phoneme_ids,
+                    all_phoneme_lens,
+                    prompt,
+                    all_bert_features,
+                    # prompt_phone_len=ph_offset,
+                    top_k=top_k,
+                    top_p=top_p,
+                    temperature=temperature,
+                    repetition_penalty = repetition_penalty,
+                    early_stop_num=self.configs.hz * self.configs.max_sec,
+                    dtype = self.precision,
+                )
                 t4 = ttime()
                 t_34 += t4 - t3
 

@@ -39,7 +39,7 @@ default_config = {
     "EOS": 1024,
 }
 
-# @torch.jit.script
+@torch.jit.script
 class T2SMLP:
     def __init__(self, w1, b1, w2, b2):
         self.w1 = w1
@@ -53,7 +53,7 @@ class T2SMLP:
         return x
 
 
-# @torch.jit.script
+@torch.jit.script
 class T2SBlock:
     def __init__(
         self,
@@ -151,7 +151,7 @@ class T2SBlock:
         return x, k_cache, v_cache
 
 
-# @torch.jit.script
+@torch.jit.script
 class T2STransformer:
     def __init__(self, num_blocks : int, blocks: List[T2SBlock]):
         self.num_blocks : int = num_blocks
@@ -362,8 +362,9 @@ class Text2SemanticDecoder(nn.Module):
         loss = loss_1 + loss_2
 
         return loss, acc
-
-    def forward_old_1(self, x, x_lens, y, y_lens, bert_feature):
+    
+    #padding on right
+    def forward_old(self, x, x_lens, y, y_lens, bert_feature):
         """
         x: phoneme_ids
         y: semantic_ids
@@ -425,7 +426,7 @@ class Text2SemanticDecoder(nn.Module):
         acc = self.ar_accuracy_metric(logits.detach(), targets).item()
         return loss, acc
     
-    def forward_old(self, 
+    def forward_old_padding_on_left(self, 
                     x:List[torch.Tensor], 
                     x_lens:torch.LongTensor, 
                     y:List[torch.Tensor], 
@@ -936,3 +937,295 @@ class Text2SemanticDecoder(nn.Module):
         if ref_free:
             return y_list, [0]*x.shape[0]
         return y_list, idx_list
+    
+    # padding on right
+    def infer_panel_batch_infer_with_flash_attn_old(
+        self,
+        x:List[torch.LongTensor],  #####全部文本token
+        x_lens:torch.LongTensor,
+        prompts:torch.LongTensor,  ####参考音频token
+        bert_feature:List[torch.LongTensor],
+        top_k: int = -100,
+        top_p: int = 100,
+        early_stop_num: int = -1,
+        temperature: float = 1.0,
+    ):
+        # 先对phones进行embedding、对bert_features进行project，再pad到相同长度，以缓解复读问题。（可能还有其他因素导致复读）
+        max_len = 0
+        for x_item, bert_item in zip(x, bert_feature):
+            max_len = max(max_len, x_item.shape[0], bert_item.shape[1])
+        x_list = [self.ar_text_embedding(item) for item in x]
+        x_list = [F.pad(item,(0,0,0,max_len-item.shape[0]),value=0) if item.shape[0]<max_len else item for item in x_list]
+        x = torch.stack(x_list, dim=0)
+
+        bert_features_list = [self.bert_proj(item.transpose(0, 1)) for item in bert_feature]
+        bert_features_list = [F.pad(item,(0,0,0,max_len-item.shape[0]), value=0) if item.shape[0]<max_len else item for item in bert_features_list]
+        bert_feature = torch.stack(bert_features_list, dim=0)
+        
+        # bert_feature = self.bert_proj(bert_feature.transpose(1, 2))
+        # x = self.ar_text_embedding(x)
+        x = x + bert_feature 
+        x = self.ar_text_position(x)
+
+        # AR Decoder
+        y = prompts
+        
+        x_len = x.shape[1]
+        x_attn_mask = torch.zeros((x_len, x_len), dtype=torch.bool)
+        stop = False
+        # print(1111111,self.num_layers)
+
+        k_cache = None
+        v_cache = None
+        ###################  first step ##########################
+        if y is not None:
+            y_emb = self.ar_audio_embedding(y)
+            y_len = y_emb.shape[1]
+            prefix_len = y.shape[1]
+            y_pos = self.ar_audio_position(y_emb)
+            xy_pos = torch.concat([x, y_pos], dim=1)
+            ref_free = False
+        else:
+            y_emb = None
+            y_len = 0
+            prefix_len = 0
+            y_pos = None
+            xy_pos = x
+            y = torch.zeros(x.shape[0], 0, dtype=torch.int, device=x.device)
+            ref_free = True
+
+
+        ##### create mask #####
+        bsz = x.shape[0]
+        src_len = x_len + y_len
+        y_lens = torch.LongTensor([y_len]*bsz).to(x.device)
+        y_mask = make_pad_mask(y_lens)
+        x_mask = make_pad_mask(x_lens)
+        
+        # (bsz, x_len + y_len)
+        xy_padding_mask = torch.concat([x_mask, y_mask], dim=1)
+
+        x_mask = F.pad(
+            x_attn_mask,
+            (0, y_len),  ###xx的纯0扩展到xx纯0+xy纯1，(x,x+y)
+            value=True,
+        )
+        y_mask = F.pad(  ###yy的右上1扩展到左边xy的0,(y,x+y)
+            torch.triu(torch.ones(y_len, y_len, dtype=torch.bool), diagonal=1),
+            (x_len, 0),
+            value=False,
+        )
+        
+        xy_mask = torch.concat([x_mask, y_mask], dim=0).view(1 , src_len, src_len).expand(bsz, -1, -1).to(x.device)
+        # xy_mask = torch.triu(torch.ones(src_len, src_len, dtype=torch.bool, device=x.device), diagonal=1)
+        xy_padding_mask = xy_padding_mask.view(bsz, 1, src_len).expand(-1, src_len, src_len)
+        xy_attn_mask = xy_mask.logical_or(xy_padding_mask)
+        xy_attn_mask = xy_attn_mask.unsqueeze(1).expand(-1, self.num_head, -1, -1)
+        new_attn_mask = torch.zeros_like(xy_attn_mask, dtype=x.dtype)
+        xy_attn_mask = new_attn_mask.masked_fill(xy_attn_mask, float("-inf"))
+        
+        ###### decode #####
+        y_list = [None]*y.shape[0]
+        batch_idx_map = list(range(y.shape[0]))
+        idx_list = [None]*y.shape[0]
+        for idx in tqdm(range(1500)):
+            if idx == 0:
+                xy_dec, k_cache, v_cache = self.t2s_transformer.process_prompt(xy_pos, xy_attn_mask)
+            else:
+                xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache)
+
+            logits = self.ar_predict_layer(
+                xy_dec[:, -1]
+            )
+
+            if idx == 0:
+                xy_attn_mask = None
+                logits = logits[:, :-1]
+                
+            samples = sample(
+                logits, y, top_k=top_k, top_p=top_p, repetition_penalty=1.35, temperature=temperature
+            )[0]
+
+            y = torch.concat([y, samples], dim=1)
+            
+            ####### 移除batch中已经生成完毕的序列,进一步优化计算量
+            reserved_idx_of_batch_for_y = None
+            if (self.EOS in samples[:, 0]) or \
+                (self.EOS in torch.argmax(logits, dim=-1)):  ###如果生成到EOS，则停止
+                    l = samples[:, 0]==self.EOS
+                    removed_idx_of_batch_for_y = torch.where(l==True)[0].tolist()
+                    reserved_idx_of_batch_for_y = torch.where(l==False)[0]
+                    # batch_indexs = torch.tensor(batch_idx_map, device=y.device)[removed_idx_of_batch_for_y]
+                    for i in removed_idx_of_batch_for_y:
+                        batch_index = batch_idx_map[i]
+                        idx_list[batch_index] = idx - 1
+                        y_list[batch_index] = y[i, :-1]
+                
+                    batch_idx_map = [batch_idx_map[i] for i in reserved_idx_of_batch_for_y.tolist()]
+                
+            # 只保留batch中未生成完毕的序列 
+            if reserved_idx_of_batch_for_y is not None:
+                # index = torch.LongTensor(batch_idx_map).to(y.device)
+                y = torch.index_select(y, dim=0, index=reserved_idx_of_batch_for_y)
+                if k_cache is not None :
+                    for i in range(len(k_cache)):
+                        k_cache[i] = torch.index_select(k_cache[i], dim=0, index=reserved_idx_of_batch_for_y)
+                        v_cache[i] = torch.index_select(v_cache[i], dim=0, index=reserved_idx_of_batch_for_y)
+                
+                
+            if (early_stop_num != -1 and (y.shape[1] - prefix_len) > early_stop_num) or idx==1499:
+                print("use early stop num:", early_stop_num)
+                stop = True
+                for i, batch_index in enumerate(batch_idx_map):
+                    batch_index = batch_idx_map[i]
+                    idx_list[batch_index] = idx
+                    y_list[batch_index] = y[i, :-1]
+                
+            if not (None in idx_list):
+                stop = True
+                
+            if stop:
+                if y.shape[1]==0:
+                    y = torch.concat([y, torch.zeros_like(samples)], dim=1)
+                    print("bad zero prediction")
+                print(f"T2S Decoding EOS [{prefix_len} -> {y.shape[1]}]")
+                break
+
+            ####################### update next step ###################################
+            y_emb = self.ar_audio_embedding(y[:, -1:])
+            xy_pos = y_emb * self.ar_audio_position.x_scale + self.ar_audio_position.alpha * self.ar_audio_position.pe[:, y_len + idx].to( dtype= y_emb.dtype,device=y_emb.device)
+
+        if (None in idx_list):
+            for i in range(x.shape[0]):
+                if idx_list[i] is None:
+                    idx_list[i] = 1500-1  ###如果没有生成到EOS，就用最大长度代替
+                    
+        if ref_free:
+            return y_list, [0]*x.shape[0]
+        return y_list, idx_list
+
+    def infer_panel_old(
+        self,
+        x,  #####全部文本token
+        x_lens,
+        prompts,  ####参考音频token
+        bert_feature,
+        top_k: int = -100,
+        top_p: int = 100,
+        early_stop_num: int = -1,
+        temperature: float = 1.0,
+    ):
+        x = self.ar_text_embedding(x)
+        x = x + self.bert_proj(bert_feature.transpose(1, 2))
+        x = self.ar_text_position(x)
+
+        # AR Decoder
+        y = prompts
+        
+        x_len = x.shape[1]
+        x_attn_mask = torch.zeros((x_len, x_len), dtype=torch.bool)
+        stop = False
+        # print(1111111,self.num_layers)
+        cache = {
+            "all_stage": self.num_layers,
+            "k": [None] * self.num_layers,  ###根据配置自己手写
+            "v": [None] * self.num_layers,
+            # "xy_pos":None,##y_pos位置编码每次都不一样的没法缓存，每次都要重新拼xy_pos.主要还是写法原因，其实是可以历史统一一样的，但也没啥计算量就不管了
+            "y_emb": None,  ##只需要对最新的samples求emb，再拼历史的就行
+            # "logits":None,###原版就已经只对结尾求再拼接了，不用管
+            # "xy_dec":None,###不需要，本来只需要最后一个做logits
+            "first_infer": 1,
+            "stage": 0,
+        }
+        ###################  first step ##########################
+        if y is not None:
+            y_emb = self.ar_audio_embedding(y)
+            y_len = y_emb.shape[1]
+            prefix_len = y.shape[1]
+            y_pos = self.ar_audio_position(y_emb)
+            xy_pos = torch.concat([x, y_pos], dim=1)
+            cache["y_emb"] = y_emb
+            ref_free = False
+        else:
+            y_emb = None
+            y_len = 0
+            prefix_len = 0
+            y_pos = None
+            xy_pos = x
+            y = torch.zeros(x.shape[0], 0, dtype=torch.int, device=x.device)
+            ref_free = True
+
+        x_attn_mask_pad = F.pad(
+                    x_attn_mask,
+                    (0, y_len),  ###xx的纯0扩展到xx纯0+xy纯1，(x,x+y)
+                    value=True,
+                )
+        y_attn_mask = F.pad(  ###yy的右上1扩展到左边xy的0,(y,x+y)
+            torch.triu(torch.ones(y_len, y_len, dtype=torch.bool), diagonal=1),
+            (x_len, 0),
+            value=False,
+        )
+        xy_attn_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0).to(
+            x.device
+        )
+        
+
+        for idx in tqdm(range(1500)):
+            
+            xy_dec, _ = self.h((xy_pos, None), mask=xy_attn_mask, cache=cache)
+            logits = self.ar_predict_layer(
+                xy_dec[:, -1]
+            )  ##不用改，如果用了cache的默认就是只有一帧，取最后一帧一样的
+            # samples = topk_sampling(logits, top_k=top_k, top_p=1.0, temperature=temperature)
+            if(idx==0):###第一次跑不能EOS否则没有了
+                logits = logits[:, :-1]  ###刨除1024终止符号的概率
+            samples = sample(
+                logits[0], y, top_k=top_k, top_p=top_p, repetition_penalty=1.35, temperature=temperature
+            )[0].unsqueeze(0)
+            # 本次生成的 semantic_ids 和之前的 y 构成新的 y
+            # print(samples.shape)#[1,1]#第一个1是bs
+            y = torch.concat([y, samples], dim=1) 
+
+            if early_stop_num != -1 and (y.shape[1] - prefix_len) > early_stop_num:
+                print("use early stop num:", early_stop_num)
+                stop = True
+
+            if torch.argmax(logits, dim=-1)[0] == self.EOS or samples[0, 0] == self.EOS:
+                # print(torch.argmax(logits, dim=-1)[0] == self.EOS, samples[0, 0] == self.EOS)
+                stop = True
+            if stop:
+                # if prompts.shape[1] == y.shape[1]:
+                #     y = torch.concat([y, torch.zeros_like(samples)], dim=1)
+                #     print("bad zero prediction")
+                if y.shape[1]==0:
+                    y = torch.concat([y, torch.zeros_like(samples)], dim=1)
+                    print("bad zero prediction")
+                print(f"T2S Decoding EOS [{prefix_len} -> {y.shape[1]}]")
+                break
+            
+            ####################### update next step ###################################
+            cache["first_infer"] = 0
+            if cache["y_emb"] is not None:
+                y_emb = torch.cat(
+                    [cache["y_emb"], self.ar_audio_embedding(y[:, -1:])], dim = 1
+                )
+                cache["y_emb"] = y_emb
+                y_pos = self.ar_audio_position(y_emb)
+                xy_pos = y_pos[:, -1:]
+            else:
+                y_emb = self.ar_audio_embedding(y[:, -1:])
+                cache["y_emb"] = y_emb
+                y_pos = self.ar_audio_position(y_emb)
+                xy_pos = y_pos
+            y_len = y_pos.shape[1]
+
+            ###最右边一列（是错的）
+            # xy_attn_mask=torch.ones((1, x_len+y_len), dtype=torch.bool,device=xy_pos.device)
+            # xy_attn_mask[:,-1]=False
+            ###最下面一行（是对的）
+            xy_attn_mask = torch.zeros(
+                (1, x_len + y_len), dtype=torch.bool, device=xy_pos.device
+            )
+        if ref_free:
+            return y[:, :-1], 0
+        return y[:, :-1], idx-1
