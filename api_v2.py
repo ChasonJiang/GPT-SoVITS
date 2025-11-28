@@ -41,7 +41,7 @@ POST:
     "repetition_penalty": 1.35,   # float. repetition penalty for T2S model.
     "sample_steps": 32,           # int. number of sampling steps for VITS model V3.
     "super_sampling": False,      # bool. whether to use super-sampling for audio when using VITS model V3.
-    "streaming_mode": False,      # bool or int. return audio chunk by chunk.T he available options are: 0,1,2,3 or True/False (0/False: Disabled | 1: Lower Quality, Faster response speed | 2/True: Medium Quality, Slow response speed | 3: Best Quality, Slowest response speed)
+    "streaming_mode": False,      # bool or int. return audio chunk by chunk.T he available options are: 0,1,2,3 or True/False (0/False: Disabled | 1/True: Best Quality, Slowest response speed (old version streaming_mode) | 2: Medium Quality, Slow response speed | 3: Lower Quality, Faster response speed )
     "overlap_length": 2,          # int. overlap length of semantic tokens for streaming mode.
     "min_chunk_length": 16,       # int. The minimum chunk length of semantic tokens for streaming mode. (affects audio chunk size)
 }
