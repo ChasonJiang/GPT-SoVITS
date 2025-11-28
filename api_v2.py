@@ -409,7 +409,6 @@ async def tts_handle(req: dict):
     req["return_fragment"] = return_fragment
     req["fixed_length_chunk"] = fixed_length_chunk
 
-    print(f"{streaming_mode} {return_fragment} {fixed_length_chunk}")
 
     streaming_mode = streaming_mode or return_fragment
 
